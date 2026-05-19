@@ -89,10 +89,10 @@ Open your terminal as a **standard user** (do not run as root/sudo directly, the
 
 ```bash
 # Clone the CachyOmarchy repository
-git clone https://github.com/mroboff/omarchy-on-cachyos.git
+git clone https://github.com/esfingex/cachyomarchy.git
 
 # Navigate to the bin directory
-cd omarchy-on-cachyos/bin
+cd cachyomarchy/bin
 
 # Make the modular installer executable
 chmod +x install-cachyomarchy.sh
