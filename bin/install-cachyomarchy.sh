@@ -147,6 +147,17 @@ check_preflight() {
         log_success "Disk space check passed: ${free_gb}GB free."
     fi
 
+    # Sudo keepalive: ask for password once upfront, then refresh every 60s in background.
+    # This prevents repeated password prompts throughout the long installation process.
+    log_info "Requesting sudo privileges (you will only be asked once)..."
+    sudo -v
+    # Spawn a background loop that keeps the sudo session alive until the script exits
+    ( while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit 0; done ) &
+    SUDO_KEEPALIVE_PID=$!
+    # Ensure the keepalive process is killed cleanly when the main script exits
+    trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
+    log_success "Sudo session established. No further password prompts will appear."
+
     log_success "Preflight validation completed successfully."
 }
 
@@ -230,6 +241,25 @@ setup_pacman_repository() {
     fi
 
     # Synchronize all package databases
+    # Refresh mirrorlist first to avoid slow/dead mirrors causing timeout errors.
+    # Uses rate-mirrors (CachyOS native tool) with fallback to reflector (standard Arch).
+    log_info "Refreshing pacman mirrorlist for fastest available servers..."
+    if command -v rate-mirrors &>/dev/null; then
+        log_info "Using rate-mirrors (CachyOS native)..."
+        sudo rate-mirrors --allow-root --protocol https \
+            --save /etc/pacman.d/mirrorlist arch 2>/dev/null \
+            || log_warn "rate-mirrors failed, proceeding with existing mirrorlist."
+    elif command -v reflector &>/dev/null; then
+        log_info "Using reflector to select fastest mirrors..."
+        sudo reflector \
+            --country 'Chile,Brazil,Argentina,United States,Germany' \
+            --age 12 --protocol https --sort rate \
+            --save /etc/pacman.d/mirrorlist 2>/dev/null \
+            || log_warn "reflector failed, proceeding with existing mirrorlist."
+    else
+        log_warn "No mirror optimization tool found (rate-mirrors/reflector). Skipping mirror refresh."
+    fi
+
     log_info "Updating local package databases..."
     sudo pacman -Syu
 
@@ -251,9 +281,10 @@ apply_cachy_patches() {
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     cd "${SCRIPT_DIR}/../omarchy"
 
-    # Patch 1: Remove conflicting 'tldr' package to prioritize CachyOS's default 'tealdeer', and ensure 'kitty' is installed
+    # Patch 1: Remove conflicting 'tldr' package; ensure 'kitty' terminal is installed
     sed -i '/tldr/d' install/omarchy-base.packages
-    echo "kitty" >> install/omarchy-base.packages
+    # Idempotency guard: only append kitty if not already present
+    grep -qx 'kitty' install/omarchy-base.packages || echo "kitty" >> install/omarchy-base.packages
 
     # Patch 2: Skip base Arch pacman repository configurations during preflight
     sed -i '/run_logged \$OMARCHY_INSTALL\/preflight\/pacman\.sh/d' install/preflight/all.sh
@@ -293,7 +324,9 @@ EOF
     # Patch 9: WiFi Device Backend Alignment (NetworkManager + iwd)
     # Disables wpa_supplicant to avoid device driver race conditions and network dropouts.
     log_info "Configuring NetworkManager with high-speed iwd WiFi backend..."
-    cat >> install/config/hardware/network.sh << 'NETEOF'
+    # Idempotency guard: only append if the wpa_supplicant block is not already present
+    if ! grep -q 'wpa_supplicant' install/config/hardware/network.sh 2>/dev/null; then
+        cat >> install/config/hardware/network.sh << 'NETEOF'
 
 # Disable conflicting wpa_supplicant services
 sudo systemctl disable --now wpa_supplicant.service 2>/dev/null
@@ -307,10 +340,15 @@ wifi.backend=iwd
 EOF
 fi
 NETEOF
+    else
+        log_info "Patch 9 (iwd backend) already applied, skipping."
+    fi
 
     # Patch 10: Pin Walker application version
     # Avoids CachyOS repository overrides that break compatibility with elephant.
-    sed -i '1a\
+    # Idempotency guard: only insert if the IgnorePkg block is not already present
+    if ! grep -q 'IgnorePkg.*walker' install/config/walker-elephant.sh 2>/dev/null; then
+        sed -i '1a\
 # Pin walker package in pacman.conf to prevent incompatible CachyOS overrides\
 if ! grep -q "^IgnorePkg.*walker" /etc/pacman.conf 2>/dev/null; then\
   if grep -q "^IgnorePkg" /etc/pacman.conf;\
@@ -321,6 +359,9 @@ if ! grep -q "^IgnorePkg.*walker" /etc/pacman.conf 2>/dev/null; then\
   fi\
 fi\
 ' install/config/walker-elephant.sh
+    else
+        log_info "Patch 10 (walker pin) already applied, skipping."
+    fi
 
     # Patch 11: Setup Fish shell activation paths for mise shims inside UWSM configurations
     sed -i 's/omarchy-cmd-present mise && eval "\$(mise activate bash --shims)"/if [ "\$SHELL" = "\/bin\/bash" ] \&\& command -v mise \&> \/dev\/null; then\n  eval "\$(mise activate bash --shims)"\nelif [ "\$SHELL" = "\/bin\/fish" ] \&\& command -v mise \&> \/dev\/null; then\n  mise activate fish | source\nfi/' config/uwsm/env
