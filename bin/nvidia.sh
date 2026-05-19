@@ -20,6 +20,12 @@ set -e
 # ==============================================================================
 # STEP 1: DETECT NVIDIA HARDWARE
 # ==============================================================================
+# Ensure lspci is installed (from pciutils package)
+if ! command -v lspci &>/dev/null; then
+    echo "[*] 'lspci' not found. Installing 'pciutils' to detect hardware..."
+    sudo pacman -S --needed --noconfirm pciutils 2>/dev/null || echo "[!] Failed to install pciutils, attempting fallback."
+fi
+
 # Query local PCI devices to find the primary NVIDIA graphics card ID.
 # - VGA (0300) or 3D controller (0302) PCI class matching vendor 10de (NVIDIA)
 GPU_ID=$(lspci -nn -d 10de: | grep -E "VGA|3D" | head -n1 | grep -oP '(?<=\[10de:)[0-9a-fA-F]{4}(?=\])' || true)
