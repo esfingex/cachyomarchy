@@ -20,6 +20,9 @@
 # Define the persistent log file path
 LOG_FILE="/tmp/cachyomarchy-install.log"
 
+# Ensure USER environment variable is always defined and exported (fixes Neovim configuration and sudoers script errors inside Docker/headless environments)
+export USER="${USER:-$(whoami)}"
+
 # If not already running inside the tee pipeline, restart the script and duplicate
 # all outputs (stdout & stderr) to both the terminal and the log file.
 if [ "${CACHYOMARCHY_LOGGED}" != "true" ]; then
@@ -365,6 +368,10 @@ fi\
 
     # Patch 11: Setup Fish shell activation paths for mise shims inside UWSM configurations
     sed -i 's/omarchy-cmd-present mise && eval "\$(mise activate bash --shims)"/if [ "\$SHELL" = "\/bin\/bash" ] \&\& command -v mise \&> \/dev\/null; then\n  eval "\$(mise activate bash --shims)"\nelif [ "\$SHELL" = "\/bin\/fish" ] \&\& command -v mise \&> \/dev\/null; then\n  mise activate fish | source\nfi/' config/uwsm/env
+
+    # Patch 12: Make file watchers sysctl call resilient inside container sandboxes
+    # Docker/podman standard environment restricts sysctl modifications, causing non-fatal failures that shouldn't halt the installer.
+    sed -i 's/sudo sysctl --system/sudo sysctl --system || true/' install/config/increase-file-watchers.sh
 
     log_success "All CachyOmarchy optimization patches successfully applied."
 }
