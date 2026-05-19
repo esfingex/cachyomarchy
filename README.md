@@ -1,128 +1,174 @@
-# omarchy-on-cachyos
+# 🚀 CachyOmarchy
 
-UPDATE 1-October-2025: The install script has been updated to support Omarchy 3.0+ out of the box. 
+[![Target OS](https://img.shields.io/badge/OS-CachyOS%20%2F%20ArchLinux-blue?style=for-the-badge&logo=arch-linux)](https://cachyos.org)
+[![Enhanced with AI](https://img.shields.io/badge/Enhanced%20with-AI%20%2F%20Antigravity-orange?style=for-the-badge&logo=google-gemini)](#)
+[![Licence](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-## 1. Introduction
+An optimized, highly resilient, and modular installation pipeline to deploy **Basecamp's Omarchy Hyprland Desktop Environment** seamlessly on **CachyOS**.
 
-This project provides an installation script for implementing DHH's Omarchy configuration on top of CachyOS. Omarchy is an 'opinionated' desktop setup, based on Hyprland that emphasizes simplicity and productivity, while CachyOS offers a performance-optimized Arch Linux distribution.
+> [!NOTE]
+> **Project Origin & AI Optimization:** This repository is an advanced, modular, and hardened fork of the original [mroboff/omarchy-on-cachyos](https://github.com/mroboff/omarchy-on-cachyos) project. It has been **extensively optimized, refactored, and enhanced using advanced Agentic AI engineering (Antigravity)** to guarantee clean modular scripting, robust session-wide logging, and seamless hardware-level CachyOS kernel compatibility.
 
-## 2. What This Script Does and Does Not Do
+---
 
-This installation script does the following three things:
+## 📖 Table of Contents
+1. [Core Philosophy](#-core-philosophy)
+2. [What This Script Does and Does Not Do](#-what-this-script-does-and-does-not-do)
+3. [📋 Pre-Requisites](#-pre-requisites)
+4. [⚠️ Important Notes (Key Architectural Decisions)](#%EF%B8%8F-important-notes-key-architectural-decisions)
+5. [🚀 Installation Instructions](#-installation-instructions)
+6. [📺 NVIDIA Acceleration Guide](#-nvidia-acceleration-guide)
+7. [🔍 How It Works Under the Hood](#-how-it-works-under-the-hood)
+8. [🤝 How to Contribute](#-how-to-contribute)
+9. [⚖️ Statement of Lack of Warranty](#%EF%B8%8F-statement-of-lack-of-warranty)
 
-  1) Clones Omarchy from its github repository 
-  2) Makes adjustments to the Omarchy install scripts to support installation on CachyOS
-  3) Launches the installation of Omarchy on an already setup CachyOS system
-  4) Installs and configures NVIDIA 580xx proprietary drivers
+---
 
-This script does not:
+## 🎯 Core Philosophy
 
- 1) Install CachyOS or any other Linux operating system
- 2) Partition, format, or encrypt hard disks
- 3) Install or configure a boot loader
- 5) Install or configure a login display manager
+**CachyOmarchy** aims to produce a strong, stable, and highly performant blend of CachyOS's hardware optimizations and Omarchy's productivity-first desktop layout. It adheres strictly to the rule of changing as little as possible between CachyOS and Omarchy, intervening **only** where defaults conflict or trigger system regressions.
 
-All of the above need to be done when you install CachyOS. 
+---
 
-## 3. Important Notes
+## 🛠️ What This Script Does and Does Not Do
 
-This script (and README.md) is intended primarily for the experienced Arch Linux user. The author of this README.md assumes the reader is comfortable using a shell/command line and is familiar with Arch specific terms such as AUR.
+### This script DOES:
+1. **Clone Upstream:** Clones Basecamp's Omarchy repository cleanly from GitHub.
+2. **Apply Patches:** Automatically makes precise adjustments to the Omarchy installer codebase to natively support CachyOS package sets.
+3. **Deploy System:** Launches the Omarchy installer on your already setup CachyOS system.
+4. **Configure Graphics:** Installs and configures NVIDIA 580xx proprietary drivers via Cachy Hardware Detection (`chwd`).
+5. **Real-time Logging:** Duplicates all standard outputs and errors into `/tmp/cachyomarchy-install.log` for easy debugging.
 
-The philosophy behind this script is to produce a strong and stable blend of CachyOS and Omarchy that changes as little as possible between the two. This script does not add software or make configuration changes outside of what CachyOS or Omarchy provide as default, except when such software or configurations provided by CachyOS and Omarchy are in conflict. In these cases, the script will choose the following:
+### This script DOES NOT:
+1. **Install CachyOS:** You must install CachyOS first.
+2. **Partition or Encrypt:** Does not handle hard disk formatting, BTRFS subvolumes, or LUKS full-disk encryption keys.
+3. **Configure Bootloaders/Login Managers:** Does not overwrite CachyOS's native display managers or GRUB/systemd-boot loaders.
 
-1. AUR helper: CachyOS uses Paru by default while Omarchy uses Yay. This script opts for Yay and will install it if not already installed.
+---
 
-2. Shell: CachyOS uses the Fish shell by default while Omarchy uses Bash. This script will keep Fish as the default interactive shell.
+## 📋 Pre-Requisites
 
-3. TLDR implementation: CachyOS installs Tealdeer by default, which is a TLDR implementation written in Rust. This script will preserve use of Tealdeer.
+This script is intended primarily for experienced Arch Linux/CachyOS users who are comfortable in a shell environment. To ensure a successful installation, your fresh CachyOS setup **must** meet the following conditions:
 
-4. Mise: Omarchy will setup Mise to run automatically via mise-activate. This script will supply the right mise-activate command for the fish shell.
+1. **File System:** You **must** select **BTRFS** as your file system and install **Snapper** as the snapshot manager. This is CachyOS's default recommendation and is strictly required for Omarchy's snapshot-restore functions to operate.
+2. **Default Shell:** You **must** choose **Fish** as your default interactive shell during the CachyOS installation (standard default).
+3. **Desktop Environment to Install:**
+   * **Option A (Minimal CLI):** Install a base CachyOS system with no desktop environment. If you choose this path, you **must manually force auto-start** (see below).
+   * **Option B (Hyprland Desktop):** Install CachyOS Hyprland, which sets up SDDM as the login display manager by default.
+   * *Do not install GNOME, KDE, or other heavy environments.*
+4. **Graphics Card Driver:** If using NVIDIA, you can boot with default open drivers; CachyOmarchy will safely strip conflicts and set up the proprietary profile during execution.
 
-5. Login System: As a distribution, Omarchy skips installation of a login display manager. Instead, Hyprland autostarts and password protection is provided upon boot by the LUKS full disk encryption service. This script, however, assumes a display manager is installed. (Note: this script does not install a display manager, but also does not configure Hyprland to start automatically if a display manager is not installed.)
+> [!IMPORTANT]
+> **Minimal System (No Display Manager) Autostart Guide:**
+> If you chose to install CachyOS **without a desktop environment/display manager**, Hyprland will not start automatically. Once the installation is complete, you **must run the following command to force auto-start setup**:
+> ```bash
+> ~/.local/share/omarchy/install/login/plymouth.sh
+> ```
+> *This script will modify your boot configuration to start Omarchy's Hyprland desktop automatically upon user login.*
 
-6. Full Disk Encryption: As a distribution, Omarchy automatically turns on full disk encryption via LUKS. This script, however, leaves this decision up to the user. CachyOS can be installed with or without full disk encryption, and this script will install Omarchy on either setup.
+---
 
-7. NVIDIA Drivers: *By default, CachyOS and Omarchy may attempt to use the latest NVIDIA drivers with open kernel modules. This script explicitly downgrades/pins the driver to the* *580xx proprietary series* *using CachyOS's* `chwd` *tool. This is a deliberate choice to fix widespread issues with hardware acceleration, electron apps, and browser flickering.*
+## ⚠️ Important Notes (Key Architectural Decisions)
 
-## 4. Pre-Requisites
+To preserve the stability and performance of CachyOS while layering Omarchy, we made the following deliberate architectural decisions to resolve default conflicts:
 
-IMPORTANT: This script does not install CachyOS. You must do that separately (and first.) This script is intended to be run on a fresh installation of CachyOS with the following configuration choices made: (Note, for information on installing CachyOS, please refer to https://www.cachyos.org.) 
+1. **AUR Helper:** CachyOS installs `paru` by default, while Omarchy expects `yay`. To prevent package conflicts, CachyOmarchy automatically bootstraps `yay` inside temporary user-space if not already present.
+2. **Default Shell:** CachyOS defaults to the Fish shell; Omarchy defaults to Bash. This script preserves **Fish** as the default interactive shell, ensuring you keep CachyOS's shell optimizations.
+3. **TLDR Implementation:** CachyOS pre-installs `tealdeer` (a lightning-fast TLDR clone in Rust). Omarchy attempts to install the standard Node-based `tldr`. We strip `tldr` from the packages list to preserve CachyOS's lightweight native alternative.
+4. **Mise Activation:** Omarchy sets up the `mise` runtime manager via `mise-activate` in Bash. We patch this logic to inject the correct environment shims for both Bash and CachyOS's **Fish shell** inside UWSM configurations.
+5. **Login & Display Manager:** Upstream Omarchy omits display managers, launching Hyprland natively on login while relying on LUKS full-disk encryption for boot security. This script assumes a display manager (like SDDM) is present. If you do not have one, you can easily force automatic command-line Hyprland boot using the `plymouth.sh` command listed in the pre-requisites.
+6. **Full Disk Encryption:** As a distribution, Omarchy forces LUKS encryption. We leave this decision entirely up to the user; CachyOmarchy will install and run perfectly on either encrypted or unencrypted CachyOS partitions.
+7. **NVIDIA Proprietary Series:** By default, modern distros boot with open kernel modules. We deliberately downgrade/pin the NVIDIA drivers to the **580xx proprietary series** using CachyOS's `chwd` tool. This is a crucial fix to bypass widespread regressions like electron browser flickering and hardware video decoding drops on Wayland.
+8. **Default Terminal (Kitty):** Upstream Omarchy defaults to Ghostty or Alacritty. To match CachyOS's advanced Wayland graphics pipelines, CachyOmarchy automatically guarantees that the latest official version of **Kitty** (GPU-accelerated terminal emulator) is pre-installed. You can seamlessly switch to it as your default terminal via the Omarchy GUI menu (`Super + Alt + Space` > `Install` > `Terminal`).
 
-1. File System: You must choose BTRFS as the file system and Snapper as the snapshot manager. This aligns with CachyOS's default recommendation for most systems, and is required for Omarchy to properly function.
+---
 
-2. Shell: You must choose Fish as the default shell for this installation script to work properly. (This is the default CachyOS shell choice.)
+## 🚀 Installation Instructions
 
-3. Desktop Environment to Install: You can install a minimal system with no desktop environment or you can choose to install the CachyOS Hyprland Desktop Environment. If you have CachyOS install Hyprland, it will also install SDDM as the login display manager by default. Do not install GNOME or KDE.
+Open your terminal as a **standard user** (do not run as root/sudo directly, the installer will prompt for sudo elevation when required) and run the following commands:
 
-4. Graphics Drivers for NVIDIA users: 
+```bash
+# Clone the CachyOmarchy repository
+git clone https://github.com/mroboff/omarchy-on-cachyos.git
 
-5. This script now automatically handles NVIDIA driver installation by enforcing the proprietary 580xx drivers (via CachyOS `chwd`). This is necessary to avoid known regressions with hardware video decoding and browser flickering present in the newer open-kernel module drivers.
+# Navigate to the bin directory
+cd omarchy-on-cachyos/bin
 
-   **Important:** 
+# Make the modular installer executable
+chmod +x install-cachyomarchy.sh
 
-   To enable hardware video decode via NVDEC in chromium, you must:
-   
-   1. Add the following to `~/.config/chromium-flags.conf`:       ```       --enable-features=VaapiOnNvidiaGPUs       ```
-   2. Install the [enhanced-h264ify extension](https://chromewebstore.google.com/detail/enhanced-h264ify/omkfmpieigblcllmkgbflkikinpkodlk) and disable **VP8** and **AV1** codecs.
-   
-   
-   
-   To fully enable hardware acceleration in Firefox, you must 
-   
-   1. Install the [enhanced-h264ify add-on](https://addons.mozilla.org/en-US/firefox/addon/enhanced-h264ify/) and disable **VP8** and **AV1** codecs and manually add the following overrides to your `user.js`:
-   
-   ```js
-   // FORCE NVIDIA HARDWARE ACCELERATION
+# Run the installation script
+./install-cachyomarchy.sh
+```
+
+---
+
+## 📺 NVIDIA Acceleration Guide
+
+To achieve flawless, stutter-free hardware video decoding under the 580xx proprietary drivers:
+
+### 🌐 Google Chrome / Chromium
+1. Open or create `~/.config/chromium-flags.conf` and append:
+   ```text
+   --enable-features=VaapiOnNvidiaGPUs
+   ```
+2. Install the [enhanced-h264ify browser extension](https://chromewebstore.google.com/detail/enhanced-h264ify/omkfmpieigblcllmkgbflkikinpkodlk) and disable the **VP8** and **AV1** codecs.
+
+### 🦊 Mozilla Firefox
+1. Install the [enhanced-h264ify Firefox add-on](https://addons.mozilla.org/en-US/firefox/addon/enhanced-h264ify/) and disable **VP8** and **AV1** codecs.
+2. Open `about:config` or add the following overrides to your `user.js` configuration file:
+   ```javascript
    user_pref("media.hardware-video-decoding.force-enabled", true);
    user_pref("media.hardware-video-encoding.force-enabled", true);
    user_pref("layers.acceleration.force-enabled", true);
    user_pref("webgl.force-enabled", true);
    user_pref("media.ffmpeg.vaapi.enabled", true);
    user_pref("media.rdd-ffmpeg.enabled", true);
-   user_pref("media.av1.enabled", true);
    user_pref("widget.dmabuf.force-enabled", true);
    user_pref("gfx.x11-egl.force-enabled", true);
    ```
 
-Other configuration changes are up to you. Note, however, that this script has not been extensively tested on various CachyOS installations other than the author's own machine.
+---
 
-## 5. Installation Instructions
+## 🔍 How It Works Under the Hood
 
-```bash
-# Clone the repository
-git clone https://github.com/mroboff/omarchy-on-cachyos.git
+Unlike single-block installation scripts, **CachyOmarchy** utilizes a modern, modular shell architecture:
 
-# Navigate to the project directory
-cd omarchy-on-cachyos/bin
-
-# Make the script executable
-chmod +x install-omarchy-on-cachyos.sh
-
-# Run the installation script
-./install-omarchy-on-cachyos.sh
+```mermaid
+graph TD
+    A[install-cachyomarchy.sh] --> B[Self-Teeing Logging Pipeline]
+    B --> C[check_preflight]
+    C --> D[clone_upstream]
+    D --> E[setup_aur_helper]
+    E --> F[setup_keyring]
+    F --> G[setup_pacman_repository]
+    G --> H[apply_cachy_patches]
+    H --> I[start_installation]
 ```
 
-**Note:** Please review the script contents before running to understand what changes will be made to your system.
+### 📋 Persistent Log Generation
+The script duplicates all standard output and error streams into a persistent file:
+```text
+/tmp/cachyomarchy-install.log
+```
+Upon script completion (or in the event of an unexpected error), a visual summary is displayed on your terminal. You can copy and share this log file directly with an AI or issue tracker to diagnose and resolve errors immediately.
 
-## 6. Statement of Lack of Warranty
+---
+
+## 🤝 How to Contribute
+
+We welcome contributions to optimize the installer further!
+1. **Fork the Repository**: Click the "Fork" button on GitHub to create your own copy.
+2. **Create a Feature Branch**: `git checkout -b feature/amazing-feature`.
+3. **Make Your Changes**: Implement your improvements or fixes.
+4. **Commit Your Changes**: `git commit -m "Add descriptive commit message"`.
+5. **Push to Your Fork**: `git push origin feature/amazing-feature`.
+6. **Open a Pull Request**: Submit a PR with a clear description of your changes.
+
+---
+
+## ⚖️ Statement of Lack of Warranty
 
 THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Use this script at your own risk. Always backup your system and important data before running installation scripts.
-
-## 7. How to Contribute
-
-We welcome contributions to improve this project! Here's how you can help:
-
-1. **Fork the Repository**: Click the "Fork" button on GitHub to create your own copy
-2. **Create a Feature Branch**: `git checkout -b feature/your-feature-name`
-3. **Make Your Changes**: Implement your improvements or fixes
-4. **Commit Your Changes**: `git commit -m "Add descriptive commit message"`
-5. **Push to Your Fork**: `git push origin feature/your-feature-name`
-6. **Open a Pull Request**: Submit a PR with a clear description of your changes
-
-### Contribution Guidelines
-- Test your changes thoroughly on CachyOS before submitting
-- Follow existing code style and conventions
-- Update documentation if adding new features
-- Report bugs using GitHub Issues 
