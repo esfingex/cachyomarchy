@@ -40,10 +40,31 @@ if [ "${CACHYOMARCHY_LOGGED}" != "true" ]; then
         else
             echo -e "\e[1;31m[!] CachyOmarchy installation encountered an error (Exit Code: $exit_code).\e[0m"
         fi
-        echo -e "\e[1;34m[*] A complete log of this session has been saved to:\e[0m"
-        echo -e "\e[1;36m    --> $LOG_FILE\e[0m"
-        echo -e "\e[1;33m[!] You can share this log file directly with an AI to analyze or debug.\e[0m"
-        echo ""
+
+        # Detect the host workspace to persist logs across container restarts/deletion
+        local workspace=""
+        for dir in "/home/esfingex/omarchy-on-cachyos" "/home/esfingex/Github/omarchy-on-cachyos" "$PWD"; do
+            if [ -w "$dir" ] && [ -d "$dir/.git" ]; then
+                workspace="$dir"
+                break
+            fi
+        done
+
+        if [ -n "$workspace" ]; then
+            cp "$LOG_FILE" "$workspace/cachyomarchy-runner.log" 2>/dev/null || true
+            if [ -f "/var/log/omarchy-install.log" ]; then
+                cp "/var/log/omarchy-install.log" "$workspace/omarchy-install.log" 2>/dev/null || true
+            fi
+            echo -e "\e[1;34m[*] To survive Docker container deletions, all logs have been persisted to your host workspace:\e[0m"
+            echo -e "\e[1;36m    --> $workspace/cachyomarchy-runner.log\e[0m"
+            [ -f "/var/log/omarchy-install.log" ] && echo -e "\e[1;36m    --> $workspace/omarchy-install.log\e[0m"
+            echo ""
+        else
+            echo -e "\e[1;34m[*] A complete log of this session has been saved to:\e[0m"
+            echo -e "\e[1;36m    --> $LOG_FILE\e[0m"
+            echo -e "\e[1;33m[!] You can share this log file directly with an AI to analyze or debug.\e[0m"
+            echo ""
+        fi
     }
     trap cleanup_outer EXIT
     
@@ -159,7 +180,34 @@ check_preflight() {
     SUDO_KEEPALIVE_PID=$!
     # Ensure the keepalive process is killed cleanly when the main script exits
     trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
-    log_success "Sudo session established. No further password prompts will appear."
+    # Set up systemctl sandbox wrapper inside Docker/virtual environments to avoid systemd errors
+    if ! [ -d /run/systemd/system ]; then
+        log_info "Creating systemctl sandbox wrapper for non-systemd environment..."
+        sudo tee /usr/local/bin/systemctl > /dev/null << 'SYSOP'
+#!/bin/bash
+if [ -d /run/systemd/system ]; then
+  exec /usr/bin/systemctl "$@"
+else
+  action=""
+  for arg in "$@"; do
+    if [[ ! "$arg" =~ ^- ]]; then
+      action="$arg"
+      break
+    fi
+  done
+  case "$action" in
+    enable|disable|mask|unmask)
+      /usr/bin/systemctl "$@" || true
+      ;;
+    *)
+      echo "[CachyOmarchy Sandbox] systemctl '$action' bypassed safely inside container."
+      ;;
+  esac
+fi
+SYSOP
+        sudo chmod +x /usr/local/bin/systemctl
+        log_success "systemctl sandbox wrapper successfully registered."
+    fi
 
     log_success "Preflight validation completed successfully."
 }
@@ -372,6 +420,18 @@ fi\
     # Patch 12: Make file watchers sysctl call resilient inside container sandboxes
     # Docker/podman standard environment restricts sysctl modifications, causing non-fatal failures that shouldn't halt the installer.
     sed -i 's/sudo sysctl --system/sudo sysctl --system || true/' install/config/increase-file-watchers.sh
+
+    # Patch 13: Automatically persist install logs to host workspace upon completion of install.sh
+    # This prevents logs from being lost when the ephemeral Docker container exits.
+    sed -i '$a \
+\
+# Persist logs to the mounted host workspace so they survive container deletion\
+if [ -w "/home/esfingex/omarchy-on-cachyos" ]; then\
+  cp "/var/log/omarchy-install.log" "/home/esfingex/omarchy-on-cachyos/omarchy-install.log" 2>/dev/null || true\
+fi' install.sh
+
+    # Patch 14: Ensure error logs are copied to host workspace immediately on crash before the error menu blocks
+    sed -i '/local exit_code=\$\?/a \  if [ -w "/home/esfingex/omarchy-on-cachyos" ]; then\n    cp "$OMARCHY_INSTALL_LOG_FILE" "/home/esfingex/omarchy-on-cachyos/omarchy-install.log" 2>/dev/null || true\n  fi' install/helpers/errors.sh
 
     log_success "All CachyOmarchy optimization patches successfully applied."
 }
