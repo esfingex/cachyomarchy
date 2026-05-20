@@ -223,19 +223,12 @@ SYSOP
 clone_upstream() {
     log_info "Synchronizing upstream Omarchy repository..."
 
-    # Resolve the absolute path to the omarchy submodule directory relative to this script.
-    # Using SCRIPT_DIR-based path prevents breakage when called from arbitrary working directories.
     local SCRIPT_DIR
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local OMARCHY_SRC="${SCRIPT_DIR}/../omarchy"
 
-    if [ -d "${OMARCHY_SRC}/.git" ]; then
-        log_info "Upstream Omarchy codebase found. Resetting and pulling latest revisions..."
-        # Hard-reset any local modifications from previous patch runs before pulling.
-        # This is safe: apply_cachy_patches() always re-applies all patches fresh on each run.
-        git -C "${OMARCHY_SRC}" reset --hard HEAD
-        git -C "${OMARCHY_SRC}" clean -fd
-        git -C "${OMARCHY_SRC}" pull
+    if [ -d "${OMARCHY_SRC}" ]; then
+        log_info "Using pre-integrated and optimized Omarchy codebase..."
     else
         log_info "Cloning a clean basecamp/omarchy repository..."
         if ! git clone https://github.com/basecamp/omarchy "${OMARCHY_SRC}"; then
