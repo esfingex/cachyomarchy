@@ -537,6 +537,12 @@ start_installation() {
     # Remove a pre-existing directory to avoid stale files from previous partial installs
     mkdir -p ~/.local/share/omarchy
     cp -rT . ~/.local/share/omarchy
+    
+    # Remove the installer's .git and development files to prevent permission issues,
+    # git mismatches, and pack loading errors under the user's runtime directory.
+    rm -rf ~/.local/share/omarchy/.git
+    rm -rf ~/.local/share/omarchy/.gitignore
+    
     cd ~/.local/share/omarchy
 
     # Show final checklist
