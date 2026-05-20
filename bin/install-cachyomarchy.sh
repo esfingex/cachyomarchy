@@ -171,6 +171,13 @@ check_preflight() {
         log_success "Disk space check passed: ${free_gb}GB free."
     fi
 
+    # Pre-install gum early: omarchy's error handler depends on it for interactive UI.
+    # If gum isn't present when a crash happens, the error handler itself crashes (double failure).
+    if ! command -v gum &>/dev/null; then
+        log_info "Pre-installing 'gum' (required by Omarchy error handler UI)..."
+        sudo pacman -S --needed --noconfirm gum || log_warn "Could not pre-install gum; continuing anyway."
+    fi
+
     # Sudo keepalive: ask for password once upfront, then refresh every 60s in background.
     # This prevents repeated password prompts throughout the long installation process.
     log_info "Requesting sudo privileges (you will only be asked once)..."
@@ -215,13 +222,23 @@ SYSOP
 # Pulls or clones the basecamp/omarchy repository
 clone_upstream() {
     log_info "Synchronizing upstream Omarchy repository..."
-    
-    if [ -d "../omarchy" ]; then
-        log_info "Upstream Omarchy codebase found. Pulling latest revisions..."
-        cd ../omarchy && git pull && cd - > /dev/null
+
+    # Resolve the absolute path to the omarchy submodule directory relative to this script.
+    # Using SCRIPT_DIR-based path prevents breakage when called from arbitrary working directories.
+    local SCRIPT_DIR
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local OMARCHY_SRC="${SCRIPT_DIR}/../omarchy"
+
+    if [ -d "${OMARCHY_SRC}/.git" ]; then
+        log_info "Upstream Omarchy codebase found. Resetting and pulling latest revisions..."
+        # Hard-reset any local modifications from previous patch runs before pulling.
+        # This is safe: apply_cachy_patches() always re-applies all patches fresh on each run.
+        git -C "${OMARCHY_SRC}" reset --hard HEAD
+        git -C "${OMARCHY_SRC}" clean -fd
+        git -C "${OMARCHY_SRC}" pull
     else
         log_info "Cloning a clean basecamp/omarchy repository..."
-        if ! git clone https://github.com/basecamp/omarchy ../omarchy; then
+        if ! git clone https://github.com/basecamp/omarchy "${OMARCHY_SRC}"; then
             log_error "Failed to clone upstream repository."
             exit 1
         fi
@@ -312,7 +329,7 @@ setup_pacman_repository() {
     fi
 
     log_info "Updating local package databases..."
-    sudo pacman -Syu
+    sudo pacman -Syu --noconfirm
 
     # Clear conflicting SDDM display manager configs to permit UWSM session handovers
     if [ -f /etc/sddm.conf ]; then
@@ -322,15 +339,70 @@ setup_pacman_repository() {
     log_success "Package databases and repositories successfully updated."
 }
 
-# Applies the 11 targeted CachyOS compatibility patches to the upstream source files
+# Applies all targeted CachyOS compatibility patches to the upstream source files
 apply_cachy_patches() {
     log_info "Applying custom CachyOS compatibility patches..."
-    
-    # Enter the synchronized source directory to apply edits
-    # Resolve absolute path to be safe against working directory drift
+
+    # Resolve absolute paths to be safe against working directory drift
     local SCRIPT_DIR
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # Dynamic host workspace path — used for log persistence; avoids hardcoded usernames
+    local HOST_WORKSPACE
+    HOST_WORKSPACE="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
     cd "${SCRIPT_DIR}/../omarchy"
+
+    # Patch 0 (CRITICAL): Rewrite guard.sh entirely to support CachyOS + Docker.
+    # Using heredoc overwrite instead of fragile sed to avoid metacharacter issues.
+    log_info "Patching upstream guard.sh for CachyOS and container compatibility..."
+    cat > install/preflight/guard.sh << 'GUARD_EOF'
+abort() {
+  echo -e "\e[31mOmarchy install requires: $1\e[0m"
+  echo
+  gum confirm "Proceed anyway on your own accord and without assistance?" || exit 1
+}
+
+# Must be an Arch distro
+if [[ ! -f /etc/arch-release ]]; then
+  abort "Vanilla Arch"
+fi
+
+# [CachyOmarchy] CachyOS, EndeavourOS, Garuda, Manjaro are explicitly supported.
+
+# Must not be running as root
+if (( EUID == 0 )); then
+  abort "Running as root (not user)"
+fi
+
+# Must be x86 only to fully work
+if [[ $(uname -m) != "x86_64" ]]; then
+  abort "x86_64 CPU"
+fi
+
+# Must have secure boot disabled
+if bootctl status 2>/dev/null | grep -q 'Secure Boot: enabled'; then
+  abort "Secure Boot disabled"
+fi
+
+# Must not have Gnome or KDE already installed
+if pacman -Qe gnome-shell &>/dev/null || pacman -Qe plasma-desktop &>/dev/null; then
+  abort "Fresh + Vanilla Arch"
+fi
+
+# Must have limine (bypassed inside Docker/container environments)
+if [[ ! -f /.dockerenv ]]; then
+  command -v limine &>/dev/null || abort "Limine bootloader"
+fi
+
+# Must have btrfs root filesystem (bypassed inside Docker/container environments)
+if [[ ! -f /.dockerenv ]]; then
+  [[ $(findmnt -n -o FSTYPE /) = "btrfs" ]] || abort "Btrfs root filesystem"
+fi
+
+# Cleared all guards
+echo "Guards: OK"
+GUARD_EOF
+    log_success "guard.sh rewritten for CachyOS and container compatibility."
 
     # Patch 1: Remove conflicting 'tldr' package; ensure 'kitty' terminal is installed
     sed -i '/tldr/d' install/omarchy-base.packages
@@ -384,6 +456,7 @@ sudo systemctl disable --now wpa_supplicant.service 2>/dev/null
 
 # Configure NetworkManager to leverage iwd backend
 if ! grep -q "wifi.backend=iwd" /etc/NetworkManager/NetworkManager.conf 2>/dev/null; then
+  sudo mkdir -p /etc/NetworkManager
   sudo tee -a /etc/NetworkManager/NetworkManager.conf > /dev/null << EOF
 
 [device]
@@ -414,24 +487,44 @@ fi\
         log_info "Patch 10 (walker pin) already applied, skipping."
     fi
 
-    # Patch 11: Setup Fish shell activation paths for mise shims inside UWSM configurations
-    sed -i 's/omarchy-cmd-present mise && eval "\$(mise activate bash --shims)"/if [ "\$SHELL" = "\/bin\/bash" ] \&\& command -v mise \&> \/dev\/null; then\n  eval "\$(mise activate bash --shims)"\nelif [ "\$SHELL" = "\/bin\/fish" ] \&\& command -v mise \&> \/dev\/null; then\n  mise activate fish | source\nfi/' config/uwsm/env
+    # Patch 11: Setup Fish shell activation paths for mise shims inside UWSM configurations.
+    # Idempotency guard: only apply if the old single-shell pattern still exists upstream.
+    if grep -q 'omarchy-cmd-present mise' config/uwsm/env 2>/dev/null; then
+        log_info "Applying Patch 11 (UWSM Fish+Bash mise shim)..."
+        sed -i 's/omarchy-cmd-present mise && eval "\$(mise activate bash --shims)"/if [ "\$SHELL" = "\/bin\/bash" ] \&\& command -v mise \&> \/dev\/null; then\n  eval "\$(mise activate bash --shims)"\nelif [ "\$SHELL" = "\/bin\/fish" ] \&\& command -v mise \&> \/dev\/null; then\n  mise activate fish | source\nfi/' config/uwsm/env
+        log_success "Patch 11 (UWSM mise shims) applied."
+    else
+        log_info "Patch 11 (UWSM mise shims) already up-to-date, skipping."
+    fi
 
     # Patch 12: Make file watchers sysctl call resilient inside container sandboxes
     # Docker/podman standard environment restricts sysctl modifications, causing non-fatal failures that shouldn't halt the installer.
     sed -i 's/sudo sysctl --system/sudo sysctl --system || true/' install/config/increase-file-watchers.sh
 
-    # Patch 13: Automatically persist install logs to host workspace upon completion of install.sh
-    # This prevents logs from being lost when the ephemeral Docker container exits.
-    sed -i '$a \
-\
-# Persist logs to the mounted host workspace so they survive container deletion\
-if [ -w "/home/esfingex/omarchy-on-cachyos" ]; then\
-  cp "/var/log/omarchy-install.log" "/home/esfingex/omarchy-on-cachyos/omarchy-install.log" 2>/dev/null || true\
-fi' install.sh
+    # Patch 13: Automatically persist install logs to host workspace upon completion of install.sh.
+    # Uses dynamic HOST_WORKSPACE path (no hardcoded username).
+    # Idempotency guard: only inject if the persistence block is not already present.
+    if ! grep -q 'CACHYOMARCHY_LOG_PERSIST' install.sh; then
+        sed -i "\$a \\
+\\
+# [CACHYOMARCHY_LOG_PERSIST] Persist logs to mounted host workspace on completion\\
+if [ -w \"${HOST_WORKSPACE}\" ]; then\\
+  cp \"\/var\/log\/omarchy-install.log\" \"${HOST_WORKSPACE}\/omarchy-install.log\" 2>\/dev\/null || true\\
+fi" install.sh
+        log_success "Patch 13 (log persistence on success) applied."
+    else
+        log_info "Patch 13 already applied, skipping."
+    fi
 
-    # Patch 14: Ensure error logs are copied to host workspace immediately on crash before the error menu blocks
-    sed -i '/local exit_code=\$\?/a \  if [ -w "/home/esfingex/omarchy-on-cachyos" ]; then\n    cp "$OMARCHY_INSTALL_LOG_FILE" "/home/esfingex/omarchy-on-cachyos/omarchy-install.log" 2>/dev/null || true\n  fi' install/helpers/errors.sh
+    # Patch 14: Ensure error logs are copied to host workspace immediately on crash.
+    # Uses dynamic HOST_WORKSPACE path (no hardcoded username).
+    # Idempotency guard: only inject if the error persistence block is not already present.
+    if ! grep -q 'CACHYOMARCHY_ERR_PERSIST' install/helpers/errors.sh; then
+        sed -i "/local exit_code=\$\?/a \\  # [CACHYOMARCHY_ERR_PERSIST] Persist logs on crash\n  if [ -w \"${HOST_WORKSPACE}\" ]; then\n    cp \"\$OMARCHY_INSTALL_LOG_FILE\" \"${HOST_WORKSPACE}\/omarchy-install.log\" 2>\/dev\/null || true\n  fi" install/helpers/errors.sh
+        log_success "Patch 14 (log persistence on error) applied."
+    else
+        log_info "Patch 14 already applied, skipping."
+    fi
 
     log_success "All CachyOmarchy optimization patches successfully applied."
 }

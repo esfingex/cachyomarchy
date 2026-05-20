@@ -76,7 +76,22 @@ fi
 # chwd will detect our patched ID list and automatically download, install, 
 # and load the correct proprietary 580xx drivers.
 echo "[*] Removing any old chwd open-driver profiles..."
-sudo chwd -r nvidia-open-dkms --noconfirm || true
+sudo chwd -r nvidia-open-dkms || true
+
+# Ensure mkinitcpio.conf.d exists so chwd's pre_install hook can write to it
+echo "[*] Ensuring /etc/mkinitcpio.conf.d exists..."
+sudo mkdir -p /etc/mkinitcpio.conf.d
+
+# chwd nvidia profile's conditional_packages hook searches for /usr/lib/modules/*/pkgbase
+# to determine the headers package to install. In containers or environments without host modules setup,
+# this directory or its pkgbase files may be missing. When no matches exist, the hook outputs "-headers",
+# which pacman interprets as an invalid option (-h -e -a -d -e -r -s) and fails with "pacman: invalid option -- 'a'".
+# We create a fallback mock pkgbase file if none are present to ensure compatibility.
+if ! ls /usr/lib/modules/*/pkgbase &>/dev/null; then
+    echo "[*] No kernel pkgbase files detected. Creating a mock entry for chwd compatibility..."
+    sudo mkdir -p "/usr/lib/modules/$(uname -r)"
+    echo "linux" | sudo tee "/usr/lib/modules/$(uname -r)/pkgbase" > /dev/null
+fi
 
 echo "[*] Running chwd automatic proprietary hardware configuration..."
 sudo chwd -a
