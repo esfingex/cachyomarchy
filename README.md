@@ -84,6 +84,8 @@ To preserve the stability and performance of CachyOS while layering Omarchy, we 
 9. **Interactive Installation Selector (Coexistencia vs Puro):** Powered by `gum`, the installer offers two distinct installation targets:
    * **Coexistencia (Testing/Dual-Desktop):** Perfect if you want to test Omarchy alongside your current desktop (like GNOME/GDM). It does not alter your display manager and only registers `Omarchy (Hyprland uwsm)` as a session entry. You can switch between GNOME and Omarchy via the session gear icon on GDM's login screen.
    * **Puro (Standalone/Production):** Recommended for dedicated environments. It configures SDDM as the primary display manager, sets up automatic login, disables competing managers, and enables Plymouth integration.
+10. **NVIDIA Package Cleanup Robustness:** Resolved issues where virtual package providers (like `nvidia-580xx-utils` providing `nvidia-utils` dependency contracts) caused pacman to throw a fatal error. The cleanup script now checks exact package names using a strict match list before triggering uninstallation, completely bypassing the "package not found" pacman crash.
+11. **Neovim Configuration Guard:** Added automatic detection and backup of pre-existing `~/.config/nvim` configurations. This prevents the interactive community Neovim setup prompt from silently stalling the script inside background loggers, resolving deadlocks.
 
 ---
 
