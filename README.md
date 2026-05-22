@@ -34,15 +34,16 @@ An optimized, highly resilient, and modular installation pipeline to deploy **Ba
 
 ### This script DOES:
 1. **Clone Upstream:** Clones Basecamp's Omarchy repository cleanly from GitHub.
-2. **Apply Patches:** Automatically makes precise adjustments to the Omarchy installer codebase to natively support CachyOS package sets.
-3. **Deploy System:** Launches the Omarchy installer on your already setup CachyOS system.
-4. **Configure Graphics:** Installs and configures NVIDIA 580xx proprietary drivers via Cachy Hardware Detection (`chwd`).
-5. **Real-time Logging:** Duplicates all standard outputs and errors into `/tmp/cachyomarchy-install.log` for easy debugging.
+2. **Interactive Mode Selector (GUM):** Prompts the user with a beautiful, interactive terminal menu to choose between **Coexistencia** (keeps active GNOME/GDM) and **Puro** (standalone SDDM deployment).
+3. **Apply Patches:** Automatically makes precise adjustments to the Omarchy installer codebase to natively support CachyOS package sets.
+4. **Deploy System:** Launches the Omarchy installer on your already setup CachyOS system.
+5. **Configure Graphics:** Installs and configures NVIDIA 580xx proprietary drivers via Cachy Hardware Detection (`chwd`).
+6. **Real-time Logging:** Duplicates all standard outputs and errors into `/tmp/cachyomarchy-install.log` for easy debugging.
 
 ### This script DOES NOT:
 1. **Install CachyOS:** You must install CachyOS first.
 2. **Partition or Encrypt:** Does not handle hard disk formatting, BTRFS subvolumes, or LUKS full-disk encryption keys.
-3. **Configure Bootloaders/Login Managers:** Does not overwrite CachyOS's native display managers or GRUB/systemd-boot loaders.
+3. **Force Overwriting Login Managers:** Does not touch your active display manager (e.g. GDM if you are on GNOME) *unless* you explicitly select the "Puro" mode during interactive setup.
 
 ---
 
@@ -80,6 +81,9 @@ To preserve the stability and performance of CachyOS while layering Omarchy, we 
 6. **Full Disk Encryption:** As a distribution, Omarchy forces LUKS encryption. We leave this decision entirely up to the user; CachyOmarchy will install and run perfectly on either encrypted or unencrypted CachyOS partitions.
 7. **NVIDIA Proprietary Series:** By default, modern distros boot with open kernel modules. We deliberately downgrade/pin the NVIDIA drivers to the **580xx proprietary series** using CachyOS's `chwd` tool. This is a crucial fix to bypass widespread regressions like electron browser flickering and hardware video decoding drops on Wayland.
 8. **Default Terminal (Kitty):** Upstream Omarchy defaults to Ghostty or Alacritty. To match CachyOS's advanced Wayland graphics pipelines, CachyOmarchy automatically guarantees that the latest official version of **Kitty** (GPU-accelerated terminal emulator) is pre-installed. You can seamlessly switch to it as your default terminal via the Omarchy GUI menu (`Super + Alt + Space` > `Install` > `Terminal`).
+9. **Interactive Installation Selector (Coexistencia vs Puro):** Powered by `gum`, the installer offers two distinct installation targets:
+   * **Coexistencia (Testing/Dual-Desktop):** Perfect if you want to test Omarchy alongside your current desktop (like GNOME/GDM). It does not alter your display manager and only registers `Omarchy (Hyprland uwsm)` as a session entry. You can switch between GNOME and Omarchy via the session gear icon on GDM's login screen.
+   * **Puro (Standalone/Production):** Recommended for dedicated environments. It configures SDDM as the primary display manager, sets up automatic login, disables competing managers, and enables Plymouth integration.
 
 ---
 

@@ -27,7 +27,7 @@ EOF
 sudo systemctl disable omarchy-seamless-login.service
 sudo systemctl unmask plymouth-quit-wait.service
 sudo systemctl enable getty@tty1.service
-sudo systemctl enable sddm.service
+sudo systemctl enable --force sddm.service
 sudo systemctl daemon-reload
 
 if systemctl is-enabled omarchy-seamless-login.service >/dev/null 2>&1; then

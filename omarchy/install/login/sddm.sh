@@ -35,4 +35,6 @@ sudo sed -i '/-auth.*pam_gnome_keyring\.so/d' /etc/pam.d/sddm
 sudo sed -i '/-password.*pam_gnome_keyring\.so/d' /etc/pam.d/sddm
 
 # Don't use chrootable here as --now will cause issues for manual installs
-sudo systemctl enable sddm.service
+sudo systemctl disable gdm.service 2>/dev/null || true
+sudo systemctl enable --force sddm.service
+

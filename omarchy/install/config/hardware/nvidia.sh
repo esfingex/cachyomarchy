@@ -43,8 +43,33 @@ echo "[*] Detected NVIDIA GPU Device ID: $GPU_ID"
 # CachyOS frequently installs the open-source kernel modules (nvidia-open-dkms)
 # by default. These conflict directly with the high-performance proprietary 
 # driver setup. We force-remove them to clear the path.
-echo "[*] Removing conflicting open-source NVIDIA drivers and helpers..."
-sudo pacman -Rdd --noconfirm libxnvctrl linux-cachyos-nvidia-open linux-cachyos-lts-nvidia-open nvidia-open-dkms 2>/dev/null || true
+# Conflicting packages to remove
+CONFLICTING_PKGS=(
+    "linux-cachyos-nvidia-open"
+    "linux-cachyos-lts-nvidia-open"
+    "nvidia-open-dkms"
+    "nvidia-utils"
+    "lib32-nvidia-utils"
+    "opencl-nvidia"
+    "lib32-opencl-nvidia"
+    "nvidia-settings"
+    "libxnvctrl"
+)
+
+# Filter only those that are actually installed to prevent pacman from failing
+TO_REMOVE=()
+for pkg in "${CONFLICTING_PKGS[@]}"; do
+    if pacman -Qq | grep -qx "$pkg"; then
+        TO_REMOVE+=("$pkg")
+    fi
+done
+
+if [ ${#TO_REMOVE[@]} -ne 0 ]; then
+    echo "[*] Removing conflicting packages: ${TO_REMOVE[*]}..."
+    sudo pacman -Rdd --noconfirm "${TO_REMOVE[@]}"
+else
+    echo "[*] No conflicting packages detected."
+fi
 
 # ==============================================================================
 # STEP 3: PATCH CHWD DEVICE ID REGISTER
@@ -76,7 +101,23 @@ fi
 # chwd will detect our patched ID list and automatically download, install, 
 # and load the correct proprietary 580xx drivers.
 echo "[*] Removing any old chwd open-driver profiles..."
-sudo chwd -r nvidia-open-dkms --noconfirm || true
+sudo chwd -r nvidia-open-dkms.prime || true
+sudo chwd -r nvidia-open-dkms || true
+
+# Ensure mkinitcpio.conf.d exists so chwd's pre_install hook can write to it
+echo "[*] Ensuring /etc/mkinitcpio.conf.d exists..."
+sudo mkdir -p /etc/mkinitcpio.conf.d
+
+# chwd nvidia profile's conditional_packages hook searches for /usr/lib/modules/*/pkgbase
+# to determine the headers package to install. In containers or environments without host modules setup,
+# this directory or its pkgbase files may be missing. When no matches exist, the hook outputs "-headers",
+# which pacman interprets as an invalid option (-h -e -a -d -e -r -s) and fails with "pacman: invalid option -- 'a'".
+# We create a fallback mock pkgbase file if none are present to ensure compatibility.
+if ! ls /usr/lib/modules/*/pkgbase &>/dev/null; then
+    echo "[*] No kernel pkgbase files detected. Creating a mock entry for chwd compatibility..."
+    sudo mkdir -p "/usr/lib/modules/$(uname -r)"
+    echo "linux" | sudo tee "/usr/lib/modules/$(uname -r)/pkgbase" > /dev/null
+fi
 
 echo "[*] Running chwd automatic proprietary hardware configuration..."
 sudo chwd -a

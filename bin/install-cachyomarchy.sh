@@ -79,12 +79,24 @@ fi
 set -euo pipefail
 
 # ==============================================================================
-# DRY-RUN MODE: pass --dry-run to preview all actions without executing anything
+# OPTIONS AND ARGUMENTS PARSING
 # ==============================================================================
 DRY_RUN=false
-if [[ "${1:-}" == "--dry-run" ]]; then
-    DRY_RUN=true
-fi
+DEPLOY_MODE=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        --coexistencia)
+            DEPLOY_MODE="Coexistencia"
+            ;;
+        --puro)
+            DEPLOY_MODE="Puro"
+            ;;
+    esac
+done
 
 # Wrapper to skip destructive commands in dry-run mode
 run_or_dry() {
@@ -175,22 +187,34 @@ check_preflight() {
     # If gum isn't present when a crash happens, the error handler itself crashes (double failure).
     if ! command -v gum &>/dev/null; then
         log_info "Pre-installing 'gum' (required by Omarchy error handler UI)..."
-        sudo pacman -S --needed --noconfirm gum || log_warn "Could not pre-install gum; continuing anyway."
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "[DRY-RUN] Would install 'gum' via: sudo pacman -S --needed --noconfirm gum"
+        else
+            sudo pacman -S --needed --noconfirm gum || log_warn "Could not pre-install gum; continuing anyway."
+        fi
     fi
 
     # Sudo keepalive: ask for password once upfront, then refresh every 60s in background.
     # This prevents repeated password prompts throughout the long installation process.
     log_info "Requesting sudo privileges (you will only be asked once)..."
-    sudo -v
-    # Spawn a background loop that keeps the sudo session alive until the script exits
-    ( while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit 0; done ) &
-    SUDO_KEEPALIVE_PID=$!
-    # Ensure the keepalive process is killed cleanly when the main script exits
-    trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] Sudo requested to verify administrative permissions."
+        sudo -n -v 2>/dev/null || log_warn "Could not obtain sudo privileges (non-interactive session), dry-run will proceed."
+    else
+        sudo -v
+        # Spawn a background loop that keeps the sudo session alive until the script exits
+        ( while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit 0; done ) &
+        SUDO_KEEPALIVE_PID=$!
+        # Ensure the keepalive process is killed cleanly when the main script exits
+        trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
+    fi
     # Set up systemctl sandbox wrapper inside Docker/virtual environments to avoid systemd errors
     if ! [ -d /run/systemd/system ]; then
         log_info "Creating systemctl sandbox wrapper for non-systemd environment..."
-        sudo tee /usr/local/bin/systemctl > /dev/null << 'SYSOP'
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "[DRY-RUN] Would create systemctl sandbox wrapper at /usr/local/bin/systemctl"
+        else
+            sudo tee /usr/local/bin/systemctl > /dev/null << 'SYSOP'
 #!/bin/bash
 if [ -d /run/systemd/system ]; then
   exec /usr/bin/systemctl "$@"
@@ -212,7 +236,8 @@ else
   esac
 fi
 SYSOP
-        sudo chmod +x /usr/local/bin/systemctl
+            sudo chmod +x /usr/local/bin/systemctl
+        fi
         log_success "systemctl sandbox wrapper successfully registered."
     fi
 
@@ -242,29 +267,43 @@ clone_upstream() {
 # Configures the AUR helper (yay) needed for compiling core elements
 setup_aur_helper() {
     if ! command -v yay &>/dev/null; then
-        log_info "AUR helper 'yay' not detected. Initiating compilation..."
-
-        # Consolidated Build Package Dependency Installation:
-        # - git: Control version tool to clone the build files.
-        # - base-devel: Complete compilation suite (make, gcc, patch, etc.) needed to compile AUR binaries.
-        log_info "Installing standard compile-time dependencies..."
-        sudo pacman -S --needed --noconfirm git base-devel
-
-        log_info "Cloning and building yay (from AUR)..."
-        # Clean any leftover /tmp/yay from previous failed runs
-        rm -rf /tmp/yay
-        git clone https://aur.archlinux.org/yay.git /tmp/yay
-        # Use a subshell to avoid changing the working directory of the parent script
-        (cd /tmp/yay && makepkg -si --noconfirm)
+        log_info "AUR helper 'yay' not detected. Attempting to install from system repositories..."
         
-        # Clean up temporary compilation directory
-        rm -rf /tmp/yay
-
-        if ! command -v yay &>/dev/null; then
-            log_error "Failed to verify AUR helper installation."
-            exit 1
+        # Try to install yay via pacman first (CachyOS has it precompiled in its repositories)
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "[DRY-RUN] Would attempt to install 'yay' via: sudo pacman -S --needed --noconfirm yay"
+        elif sudo pacman -S --needed --noconfirm yay 2>/dev/null; then
+            log_success "'yay' successfully installed from system repositories."
+            return 0
         fi
-        log_success "AUR helper 'yay' successfully installed."
+
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "[DRY-RUN] Would fall back to compiling yay from AUR."
+        else
+            log_warn "Could not install 'yay' from repositories. Falling back to AUR compilation..."
+
+            # Consolidated Build Package Dependency Installation:
+            # - git: Control version tool to clone the build files.
+            # - base-devel: Complete compilation suite (make, gcc, patch, etc.) needed to compile AUR binaries.
+            log_info "Installing standard compile-time dependencies..."
+            sudo pacman -S --needed --noconfirm git base-devel
+
+            log_info "Cloning and building yay (from AUR)..."
+            # Clean any leftover /tmp/yay from previous failed runs
+            rm -rf /tmp/yay
+            git clone https://aur.archlinux.org/yay.git /tmp/yay
+            # Use a subshell to avoid changing the working directory of the parent script
+            (cd /tmp/yay && makepkg -si --noconfirm)
+            
+            # Clean up temporary compilation directory
+            rm -rf /tmp/yay
+
+            if ! command -v yay &>/dev/null; then
+                log_error "Failed to verify AUR helper installation."
+                exit 1
+            fi
+            log_success "AUR helper 'yay' successfully compiled and installed."
+        fi
     else
         log_info "AUR helper 'yay' is already present. Skipping installation."
     fi
@@ -274,16 +313,20 @@ setup_aur_helper() {
 setup_keyring() {
     log_info "Configuring Omarchy GPG keyring signatures..."
     
-    # Import the key (F0134EE680CAC571) with keyserver fallbacks
-    if ! sudo pacman-key --recv-keys F0134EE680CAC571 --keyserver keys.openpgp.org; then
-        log_warn "Primary keyserver timed out. Attempting Canonical high-availability fallback..."
-        if ! sudo pacman-key --recv-keys F0134EE680CAC571 --keyserver keyserver.ubuntu.com; then
-            log_warn "Failed to download GPG key. Settle for SigLevel fallback in pacman.conf."
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] Would receive and sign keys: F0134EE680CAC571"
+    else
+        # Import the key (F0134EE680CAC571) with keyserver fallbacks
+        if ! sudo pacman-key --recv-keys F0134EE680CAC571 --keyserver keys.openpgp.org; then
+            log_warn "Primary keyserver timed out. Attempting Canonical high-availability fallback..."
+            if ! sudo pacman-key --recv-keys F0134EE680CAC571 --keyserver keyserver.ubuntu.com; then
+                log_warn "Failed to download GPG key. Settle for SigLevel fallback in pacman.conf."
+            fi
         fi
-    fi
 
-    # Locally trust and sign the key inside the Arch key ring
-    sudo pacman-key --lsign-key F0134EE680CAC571 || true
+        # Locally trust and sign the key inside the Arch key ring
+        sudo pacman-key --lsign-key F0134EE680CAC571 || true
+    fi
     log_success "Cryptographic keyring configured."
 }
 
@@ -295,8 +338,12 @@ setup_pacman_repository() {
     # - SigLevel = Optional TrustAll: Bypasses strict local key checking if keyserver timeouts occur.
     # - Server = ... \$arch: Dynamic system architecture resolution preserves native package queries.
     if ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
-        log_info "Adding [omarchy] block to /etc/pacman.conf..."
-        echo -e "\n[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/\$arch" | sudo tee -a /etc/pacman.conf > /dev/null
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "[DRY-RUN] Would add [omarchy] block to /etc/pacman.conf"
+        else
+            log_info "Adding [omarchy] block to /etc/pacman.conf..."
+            echo -e "\n[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/\$arch" | sudo tee -a /etc/pacman.conf > /dev/null
+        fi
     else
         log_info "Omarchy repository is already registered in /etc/pacman.conf."
     fi
@@ -305,29 +352,33 @@ setup_pacman_repository() {
     # Refresh mirrorlist first to avoid slow/dead mirrors causing timeout errors.
     # Uses rate-mirrors (CachyOS native tool) with fallback to reflector (standard Arch).
     log_info "Refreshing pacman mirrorlist for fastest available servers..."
-    if command -v rate-mirrors &>/dev/null; then
-        log_info "Using rate-mirrors (CachyOS native)..."
-        sudo rate-mirrors --allow-root --protocol https \
-            --save /etc/pacman.d/mirrorlist arch 2>/dev/null \
-            || log_warn "rate-mirrors failed, proceeding with existing mirrorlist."
-    elif command -v reflector &>/dev/null; then
-        log_info "Using reflector to select fastest mirrors..."
-        sudo reflector \
-            --country 'Chile,Brazil,Argentina,United States,Germany' \
-            --age 12 --protocol https --sort rate \
-            --save /etc/pacman.d/mirrorlist 2>/dev/null \
-            || log_warn "reflector failed, proceeding with existing mirrorlist."
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] Would refresh pacman mirrorlist and update local package databases (sudo pacman -Syu)"
     else
-        log_warn "No mirror optimization tool found (rate-mirrors/reflector). Skipping mirror refresh."
-    fi
+        if command -v rate-mirrors &>/dev/null; then
+            log_info "Using rate-mirrors (CachyOS native)..."
+            sudo rate-mirrors --allow-root --protocol https \
+                --save /etc/pacman.d/mirrorlist arch 2>/dev/null \
+                || log_warn "rate-mirrors failed, proceeding with existing mirrorlist."
+        elif command -v reflector &>/dev/null; then
+            log_info "Using reflector to select fastest mirrors..."
+            sudo reflector \
+                --country 'Chile,Brazil,Argentina,United States,Germany' \
+                --age 12 --protocol https --sort rate \
+                --save /etc/pacman.d/mirrorlist 2>/dev/null \
+                || log_warn "reflector failed, proceeding with existing mirrorlist."
+        else
+            log_warn "No mirror optimization tool found (rate-mirrors/reflector). Skipping mirror refresh."
+        fi
 
-    log_info "Updating local package databases..."
-    sudo pacman -Syu --noconfirm
+        log_info "Updating local package databases..."
+        sudo pacman -Syu --noconfirm
 
-    # Clear conflicting SDDM display manager configs to permit UWSM session handovers
-    if [ -f /etc/sddm.conf ]; then
-        log_info "Cleaning up conflicting legacy /etc/sddm.conf..."
-        sudo rm /etc/sddm.conf
+        # Clear conflicting SDDM display manager configs to permit UWSM session handovers
+        if [ -f /etc/sddm.conf ]; then
+            log_info "Cleaning up conflicting legacy /etc/sddm.conf..."
+            sudo rm /etc/sddm.conf
+        fi
     fi
     log_success "Package databases and repositories successfully updated."
 }
@@ -415,6 +466,33 @@ GUARD_EOF
     # Patch 5: Disable upstream plymouth.sh to prevent graphic login locking conflicts
     sed -i '/run_logged \$OMARCHY_INSTALL\/login\/plymouth\.sh/d' install/login/all.sh
 
+    # Patch 5B: Configure login manager based on installation mode (Coexistencia vs Puro)
+    if [[ "$DEPLOY_MODE" == "Coexistencia" ]]; then
+        log_info "Configurando instalador para modo Coexistencia (preservando GDM/GNOME)..."
+        cat > install/login/coexistencia-login.sh << 'COEXIST_EOF'
+#!/bin/bash
+echo "Configurando entrada de sesión de coexistencia para Omarchy..."
+sudo mkdir -p /usr/local/share/wayland-sessions
+sudo mkdir -p /usr/share/wayland-sessions
+
+# Copiar el descriptor de sesión de Omarchy para GDM y otros gestores
+sudo cp "$OMARCHY_PATH/default/wayland-sessions/omarchy.desktop" /usr/local/share/wayland-sessions/omarchy.desktop
+sudo cp "$OMARCHY_PATH/default/wayland-sessions/omarchy.desktop" /usr/share/wayland-sessions/omarchy.desktop
+
+echo "Sesión de coexistencia registrada exitosamente."
+COEXIST_EOF
+        chmod +x install/login/coexistencia-login.sh
+        
+        # Reemplazar la llamada a sddm.sh por coexistencia-login.sh
+        sed -i 's|\$OMARCHY_INSTALL/login/sddm.sh|\$OMARCHY_INSTALL/login/coexistencia-login.sh|' install/login/all.sh
+    else
+        log_info "Configurando instalador para modo Puro (SDDM dedicado)..."
+        # En modo Puro, asegurar que desactivemos GDM antes de habilitar SDDM en sddm.sh
+        if ! grep -q "systemctl disable gdm.service" install/login/sddm.sh; then
+            sed -i '/systemctl enable sddm\.service/i \sudo systemctl disable gdm.service 2>/dev/null || true' install/login/sddm.sh
+        fi
+    fi
+
     # Patch 6: CRITICAL - Overwrite snapper script to ONLY re-enable mkinitcpio pacman build hooks.
     # Restores package updates integrity, preventing system bricks on future kernel upgrades.
     log_info "Patching initramfs mkinitcpio hooks manager..."
@@ -440,12 +518,17 @@ EOF
     # Patch 9: WiFi Device Backend Alignment (NetworkManager + iwd)
     # Disables wpa_supplicant to avoid device driver race conditions and network dropouts.
     log_info "Configuring NetworkManager with high-speed iwd WiFi backend..."
-    # Idempotency guard: only append if the wpa_supplicant block is not already present
-    if ! grep -q 'wpa_supplicant' install/config/hardware/network.sh 2>/dev/null; then
-        cat >> install/config/hardware/network.sh << 'NETEOF'
+    cat > install/config/hardware/network.sh << 'NETEOF'
+#!/bin/bash
+# Enable iwd service to start on next boot
+sudo systemctl enable iwd.service 2>/dev/null
 
-# Disable conflicting wpa_supplicant services
-sudo systemctl disable --now wpa_supplicant.service 2>/dev/null
+# Prevent systemd-networkd-wait-online timeout on boot
+sudo systemctl disable systemd-networkd-wait-online.service 2>/dev/null
+sudo systemctl mask systemd-networkd-wait-online.service 2>/dev/null
+
+# Disable conflicting wpa_supplicant service on next boot
+sudo systemctl disable wpa_supplicant.service 2>/dev/null
 
 # Configure NetworkManager to leverage iwd backend
 if ! grep -q "wifi.backend=iwd" /etc/NetworkManager/NetworkManager.conf 2>/dev/null; then
@@ -457,9 +540,7 @@ wifi.backend=iwd
 EOF
 fi
 NETEOF
-    else
-        log_info "Patch 9 (iwd backend) already applied, skipping."
-    fi
+    chmod +x install/config/hardware/network.sh
 
     # Patch 10: Pin Walker application version
     # Avoids CachyOS repository overrides that break compatibility with elephant.
@@ -526,6 +607,13 @@ fi" install.sh
 start_installation() {
     log_info "Preparing local installation files..."
     
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] Would create ~/.local/share/omarchy and copy installation files there."
+        log_info "[DRY-RUN] Would run the main installation script: ./install.sh"
+        log_success "Dry-run simulation completed successfully! No system changes were made."
+        return 0
+    fi
+
     # Replicate the configured deployment folder in ~/.local/share/omarchy
     # Remove a pre-existing directory to avoid stale files from previous partial installs
     mkdir -p ~/.local/share/omarchy
@@ -543,6 +631,15 @@ start_installation() {
     echo "=============================================================================="
     echo " CachyOmarchy is fully configured and ready to be deployed:"
     echo "=============================================================================="
+    echo -e "  * \e[1;36mMODO DE INSTALACIÓN SELECCIONADO:\e[0m \e[1;35m$DEPLOY_MODE\e[0m"
+    if [[ "$DEPLOY_MODE" == "Coexistencia" ]]; then
+        echo "    -> Se mantendrá tu gestor de sesiones actual (ej. GDM/GNOME)."
+        echo "    -> Podrás elegir Omarchy en la pantalla de inicio de sesión."
+    else
+        echo "    -> SDDM reemplazará al gestor de sesiones activo."
+        echo "    -> Se habilitará el inicio de sesión automático."
+    fi
+    echo "------------------------------------------------------------------------------"
     echo "  1. Registered [omarchy] repo with TrustAll GPG fallback and dynamic arch."
     echo "  2. Removed conflicting 'tldr' package to prioritize CachyOS's 'tealdeer'."
     echo "  3. Protected CachyOS core packages and pacman config."
@@ -556,18 +653,51 @@ start_installation() {
     echo " 11. Appended 'kitty' to packages list to guarantee latest terminal installation."
     echo "=============================================================================="
     echo ""
-    echo "IMPORTANT: If you installed CachyOS without a desktop environment, you will"
-    echo "need to run the following script after this installation completes:"
-    echo "   ~/.local/share/omarchy/install/login/plymouth.sh"  
-    echo ""
-    echo "This will configure your system to launch Hyprland/UWSM automatically."
-    echo ""
+    if [[ "$DEPLOY_MODE" == "Puro" ]]; then
+        echo "IMPORTANT: If you installed CachyOS without a desktop environment, you will"
+        echo "need to run the following script after this installation completes:"
+        echo "   ~/.local/share/omarchy/install/login/plymouth.sh"  
+        echo ""
+        echo "This will configure your system to launch Hyprland/UWSM automatically."
+        echo ""
+    fi
     echo "Press Enter to begin the installation of CachyOmarchy..."
     read -r
+
+    # Pre-emptively backup existing Neovim configuration to prevent interactive gum confirm locks
+    if [ -d "$HOME/.config/nvim" ]; then
+        local nvim_backup="$HOME/.config/nvim.backup.cachyomarchy-$(date +%Y%m%d-%H%M%S)"
+        log_info "Existing Neovim config detected at ~/.config/nvim."
+        log_info "Backing it up to ${nvim_backup} to prevent installer prompt lock..."
+        mv "$HOME/.config/nvim" "$nvim_backup"
+        log_success "Backup created successfully."
+    fi
 
     # Execute main setup script
     chmod +x install.sh
     ./install.sh
+
+    echo ""
+    echo "=============================================================================="
+    echo -e "\e[1;32m CachyOmarchy ha sido instalado con éxito! \e[0m"
+    echo "=============================================================================="
+    if [[ "$DEPLOY_MODE" == "Coexistencia" ]]; then
+        echo -e "\e[1;36m MODO COEXISTENCIA ACTIVADO:\e[0m"
+        echo "  - Tu gestor de inicio (GDM/LightDM/etc.) se ha conservado intacto."
+        echo "  - Se ha registrado la sesión 'Omarchy (Hyprland uwsm)' en tu sistema."
+        echo "  - Para iniciar en Omarchy:"
+        echo "    1. Cierra la sesión de tu escritorio actual (GNOME/KDE)."
+        echo "    2. En la pantalla de login, haz clic sobre tu usuario."
+        echo "    3. Pulsa sobre el botón del engranaje en la esquina inferior derecha."
+        echo "    4. Elige 'Omarchy (Hyprland uwsm)' y pon tu contraseña."
+    else
+        echo -e "\e[1;36m MODO PURO ACTIVADO:\e[0m"
+        echo "  - SDDM ha sido establecido como tu gestor de sesiones principal."
+        echo "  - Se configuró el inicio de sesión automático y directo."
+        echo "  - ¡Simplemente reinicia tu máquina para arrancar directo en tu Omarchy!"
+    fi
+    echo "=============================================================================="
+    echo ""
 }
 
 # ==============================================================================
@@ -576,6 +706,43 @@ start_installation() {
 
 main() {
     check_preflight
+
+    # Interactive menu selector using GUM (if available and standard input is a terminal)
+    if [ -n "$DEPLOY_MODE" ]; then
+        log_success "Modo de instalación forzado por argumento de línea de comandos: $DEPLOY_MODE"
+    elif [[ "$DRY_RUN" == "true" ]]; then
+        log_info "Simulación: Modo de instalación establecido en 'Coexistencia' por defecto."
+        DEPLOY_MODE="Coexistencia"
+    elif [ ! -t 0 ] || ! command -v gum &>/dev/null; then
+        log_info "Entorno no interactivo o 'gum' ausente: detectando gestor activo..."
+        # Si GDM está instalado o activo, preferimos Coexistencia por defecto por seguridad
+        if systemctl is-active gdm.service &>/dev/null || pacman -Qe gdm &>/dev/null || pacman -Qe gnome-shell &>/dev/null; then
+            log_success "GDM o GNOME detectado. Seleccionando modo 'Coexistencia' por defecto para seguridad."
+            DEPLOY_MODE="Coexistencia"
+        else
+            log_info "No se detectó GDM/GNOME. Seleccionando modo 'Puro' por defecto."
+            DEPLOY_MODE="Puro"
+        fi
+    else
+        echo ""
+        log_info "Iniciando selector interactivo de modo de despliegue..."
+        local choose_hdr="Selecciona el modo de instalación para CachyOmarchy:"
+        local opt_coexist="Coexistencia (Mantiene tu escritorio actual y GDM; añade Omarchy al menú de inicio)"
+        local opt_puro="Puro (Entorno Omarchy dedicado e independiente con inicio automático mediante SDDM)"
+        
+        local selection
+        selection=$(gum choose --header "$choose_hdr" "$opt_coexist" "$opt_puro")
+        
+        if [[ "$selection" == *"$opt_coexist"* ]]; then
+            DEPLOY_MODE="Coexistencia"
+            log_success "Modo seleccionado: Coexistencia (GNOME y GDM se mantendrán activos)."
+        else
+            DEPLOY_MODE="Puro"
+            log_success "Modo seleccionado: Puro (SDDM se configurará como gestor principal)."
+        fi
+        echo ""
+    fi
+
     clone_upstream
     setup_aur_helper
     setup_keyring
